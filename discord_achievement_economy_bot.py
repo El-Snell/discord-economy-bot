@@ -13,10 +13,6 @@ TOKEN = os.getenv("DISCORD_TOKEN", "YOUR_BOT_TOKEN_HERE")
 DAILY_COOLDOWN_HOURS = 24
 WORK_COOLDOWN_MINUTES = 30
 
-JUKEBOX_QUEUES: dict[int, list[str]] = {}
-JUKEBOX_LOOPS: dict[int, bool] = {}
-JUKEBOX_NOW_PLAYING: dict[int, str] = {}
-
 PLUGIN_NAME = "MineCraftify"
 FONT_PATH = "assets/fonts/minecraft.ttf"
 NPC_SHOPKEEPERS = {
@@ -266,7 +262,8 @@ def ensure_user(guild_id: int, user_id: int) -> None:
             """
             INSERT OR IGNORE INTO users (
                 guild_id, user_id, wallet, bank, daily_last_claim, work_last_claim,
-                work_count, gamble_wins, gamble_losses, spent_total
+                work_count, gamble_wins, gamble_losses, spent_total, xp, level,
+                quest_key, quest_progress, quest_target, quest_reward, quest_xp_reward, quest_last_refresh
             ) VALUES (?, ?, 0, 0, NULL, NULL, 0, 0, 0, 0, 0, 1, NULL, 0, 0, 0, 0, NULL)
             """,
             (guild_id, user_id),
@@ -452,62 +449,59 @@ def toast_image_path(achievement_name: str) -> str:
     return os.path.join("generated_toasts", f"toast_{sanitize_filename(achievement_name)}.png")
 
 
-def create_toast_image(achievement_name: str, description: str) -> Optional[str]: 
-    if not USE_TOAST_IMAGES: 
-        return None 
-    try: 
-        from PIL import Image, ImageDraw, ImageFont 
-    except ImportError: 
-        return None 
-    os.makedirs("generated_toasts", exist_ok=True) 
-    scale = 3 width, height = 160 * scale, 32 * scale 
-    img = Image.new("RGBA", (width, height), (0, 0, 0, 0)) 
-    draw = ImageDraw.Draw(img) 
-    bg = (28, 28, 28, 255) 
-    border_dark = (18, 18, 18, 255) 
-    border_light = (90, 90, 90, 255) 
-    gold = (255, 221, 87, 255) 
-    white = (255, 255, 255, 255) 
-    rarity_map = { "first_coin": ("common", (170, 170, 170, 255)), "worker_i": ("uncommon", (85, 255, 85, 255)), "collector_i": ("rare", (85, 85, 255, 255)), "spender_i": ("rare", (85, 85, 255, 255)), "wealthy": ("epic", (170, 0, 170, 255)), "tycoon": ("legendary", (255, 170, 0, 255)), } 
-    rarity_name, rarity_color = rarity_map.get( achievement_name.lower().strip(), ("common", (170, 170, 170, 255)), ) 
-    draw.rectangle((0, 0, width - 1, height - 1), fill=border_dark) 
-    draw.rectangle((3, 3, width - 4, height - 4), fill=rarity_color) 
-    draw.rectangle((6, 6, width - 7, height - 7), fill=bg) 
-    icon_x, icon_y = 10 * scale, 7 * scale
-    icon_size = 18 * scale
-    icon_path = os.path.join(ASSET_ICON_PATH, sanitize_filename(achievement_name) + ".png") 
-    if os.path.exists(icon_path): 
-        icon = Image.open(icon_path).convert("RGBA").resize((icon_size, icon_size), Image.NEAREST) 
-        img.paste(icon, (icon_x, icon_y), icon) 
-    else: 
-        draw.rectangle((icon_x, icon_y, icon_x + icon_size, icon_y + icon_size), fill=(110, 78, 44, 255)) # Enchant glow for epic/legendary 
-    if rarity_name in {"epic", "legendary"}: 
-        glow = Image.new("RGBA", (icon_size, icon_size), (0, 0, 0, 0)) 
-        glow_draw = ImageDraw.Draw(glow) 
-        for i in range(0, icon_size, 6): 
-            glow_draw.line( [(i, 0), (0, i)], fill=(180, 80, 255, 70) 
-                           if rarity_name == "epic" else (255, 220, 120, 80), width=2, ) 
-            glow_draw.line( [(icon_size - 1, i), (i, icon_size - 1)], fill=(180, 80, 255, 70) 
-                           if rarity_name == "epic" else (255, 220, 120, 80), width=2, ) 
-            img.alpha_composite(glow, (icon_x, icon_y)) # Sparkles 
-            sparkle_points = [ (icon_x + icon_size + 6, icon_y + 2), (icon_x + icon_size + 14, icon_y + 14), (icon_x + icon_size - 2, icon_y + 22), ] 
-            for sx, sy in sparkle_points: 
-                draw.line((sx - 2, sy, sx + 2, sy), fill=gold, width=1) 
-                draw.line((sx, sy - 2, sx, sy + 2), fill=gold, width=1) 
-    try: 
-        title_font = ImageFont.truetype( FONT_PATH if os.path.exists(FONT_PATH) else "DejaVuSans-Bold.ttf", 7 * scale, ) 
-        body_font = ImageFont.truetype( FONT_PATH if os.path.exists(FONT_PATH) else "DejaVuSans-Bold.ttf", 8 * scale, ) 
-        small_font = ImageFont.truetype( FONT_PATH if os.path.exists(FONT_PATH) else "DejaVuSans-Bold.ttf", 5 * scale, ) 
-    except Exception: 
-        title_font = ImageFont.load_default() 
-        body_font = ImageFont.load_default() 
-        small_font = ImageFont.load_default() 
-    tx = 36 * scale 
-    draw.text((tx, 6 * scale), "Achievement Get!", font=title_font, fill=gold) 
-    draw.text((tx, 14 * scale), achievement_name[:24], font=body_font, fill=white) 
-    draw.text((tx, 23 * scale), rarity_name.upper(), font=small_font, fill=rarity_color) 
-    output = toast_image_path(achievement_name) 
-    img.save(output) 
+def create_toast_image(achievement_name: str, description: str) -> Optional[str]:
+    if not USE_TOAST_IMAGES:
+        return None
+
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except ImportError:
+        return None
+
+    os.makedirs("generated_toasts", exist_ok=True)
+
+    scale = 3
+    width, height = 160 * scale, 32 * scale
+    img = Image.new("RGBA", (width, height), (0,0,0,0))
+    draw = ImageDraw.Draw(img)
+
+    bg = (28,28,28,255)
+    border_dark = (18,18,18,255)
+    border_light = (90,90,90,255)
+    gold = (255,221,87,255)
+    white = (255,255,255,255)
+
+    draw.rectangle((0,0,width-1,height-1), fill=border_dark)
+    draw.rectangle((3,3,width-4,height-4), fill=border_light)
+    draw.rectangle((6,6,width-7,height-7), fill=bg)
+
+    icon_x, icon_y = 10*scale, 7*scale
+    icon_size = 18*scale
+
+    icon_path = os.path.join(ASSET_ICON_PATH, sanitize_filename(achievement_name)+".png")
+
+    if os.path.exists(icon_path):
+        icon = Image.open(icon_path).convert("RGBA").resize((icon_size,icon_size), Image.NEAREST)
+        img.paste(icon,(icon_x,icon_y),icon)
+    else:
+        draw.rectangle((icon_x,icon_y,icon_x+icon_size,icon_y+icon_size), fill=(110,78,44))
+
+    try:
+        title_font = ImageFont.truetype(FONT_PATH if os.path.exists(FONT_PATH) else "DejaVuSans-Bold.ttf", 7 * scale)
+        body_font = ImageFont.truetype(FONT_PATH if os.path.exists(FONT_PATH) else "DejaVuSans-Bold.ttf", 8 * scale)
+    except Exception:
+        title_font = ImageFont.load_default()
+        body_font = ImageFont.load_default()
+
+    title="Achievement Get!"
+    body=achievement_name[:24]
+
+    tx = 36*scale
+    draw.text((tx,6*scale),title,font=title_font,fill=gold)
+    draw.text((tx,14*scale),body,font=body_font,fill=white)
+
+    output = toast_image_path(achievement_name)
+    img.save(output)
     return output
 
 
@@ -582,15 +576,12 @@ async def award_achievement(guild: discord.Guild, member: discord.Member, achiev
     role_result = await grant_role_if_configured(member, ach["role_id"])
     toast_path = create_toast_image(ach["name"], ach["description"])
     message = (
-        f"Achievement unlocked for {member.mention}: **{ach['name']}**
-"
-        f"Description: {ach['description']}
-"
+        f"Achievement unlocked for {member.mention}: **{ach['name']}**/n"
+        f"Description: {ach['description']}/n"
         f"Coin reward: **{ach['reward_amount']}**"
     )
     if role_result:
-        message += f"
-{role_result}"
+        message += f"/n{role_result}"
     return True, message, toast_path, "levelup"
 
 
@@ -646,10 +637,10 @@ async def create_achievement(interaction: discord.Interaction, name: str, descri
             (interaction.guild_id, normalized, description, reward_amount, role_id),
         )
         conn.commit()
-    extra = f"
-Role reward: {role.mention}" if role else ""
-    await send_plugin_message(interaction, f"Created achievement **{normalized}**.
-Reward: **{reward_amount}** coins{extra}")
+        extra = f"Role reward: {role.mention}" if role else ""
+    await send_plugin_message(
+        interaction,
+        f"Created achievement **{normalized}**./nReward: **{reward_amount}** coins{extra}",)
 
 
 @bot.tree.command(name="list_achievements", description="List all achievements in this server")
@@ -662,8 +653,11 @@ async def list_achievements(interaction: discord.Interaction) -> None:
     embed = discord.Embed(title="Achievement Registry")
     for row in rows[:25]:
         role_text = f" | Role: <@&{row['role_id']}>" if row["role_id"] else ""
-        embed.add_field(name=row["name"], value=f"{row['description']}
-Reward: {row['reward_amount']} coins{role_text}", inline=False)
+        embed.add_field(
+            name=row["name"],
+            value=f"{row['description']}/nReward: {row['reward_amount']} coins{role_text}",
+            inline=False,
+        )
     await send_plugin_message(interaction, "Opening achievement registry.", embed=embed)
 
 
@@ -696,9 +690,11 @@ async def my_achievements(interaction: discord.Interaction, member: Optional[dis
         return
     embed = discord.Embed(title=f"Achievements for {target.display_name}")
     for row in rows[:25]:
-        embed.add_field(name=row["achievement_name"], value=f"{row['description']}
-Reward: {row['reward_amount']} coins
-Awarded: {row['awarded_at']}", inline=False)
+        embed.add_field(
+            name=row["achievement_name"],
+            value=f"{row['description']}/nReward: {row['reward_amount']} coins/nAwarded: {row['awarded_at']}",
+            inline=False,
+        )
     await send_plugin_message(interaction, f"Opening player achievement log for {target.display_name}.", embed=embed)
 
 
@@ -732,18 +728,11 @@ async def daily(interaction: discord.Interaction) -> None:
     quest_msg = advance_quest(interaction.guild_id, interaction.user.id, "daily")
     response = f"You claimed **{reward}** coins and **{xp_gain} XP**."
     if leveled_up:
-        response += f"
-Level up! You are now level **{level}**."
+        response += f"/nLevel up! You are now level **{level}**."
     if quest_msg:
-        response += f"
-{quest_msg}"
+        response += f"/n{quest_msg}"
     if auto_msgs:
-        response += "
-
-New achievements unlocked:
-" + "
-
-".join(auto_msgs)
+        response += "/n /n New achievements unlocked:" + "/n/n".join(auto_msgs)
     await send_plugin_message(interaction, response)
     await play_event_sound_for_member(interaction.user, "coin")
 
@@ -764,18 +753,11 @@ async def work(interaction: discord.Interaction) -> None:
     quest_msg = advance_quest(interaction.guild_id, interaction.user.id, "work")
     response = f"You worked and earned **{reward}** coins and **{xp_gain} XP**."
     if leveled_up:
-        response += f"
-Level up! You are now level **{level}**."
+        response += f"/nLevel up! You are now level **{level}**."
     if quest_msg:
-        response += f"
-{quest_msg}"
+        response += f"/n{quest_msg}"
     if auto_msgs:
-        response += "
-
-New achievements unlocked:
-" + "
-
-".join(auto_msgs)
+        response += "/n/nNew achievements unlocked:" + "/n/n".join(auto_msgs)
     await send_plugin_message(interaction, response)
     await play_event_sound_for_member(interaction.user, "note")
 
@@ -812,12 +794,7 @@ async def pay(interaction: discord.Interaction, member: discord.Member, amount: 
     auto_msgs = await check_auto_achievements(interaction.user) + await check_auto_achievements(member)
     response = f"Sent **{amount}** coins to {member.mention}."
     if auto_msgs:
-        response += "
-
-New achievements unlocked:
-" + "
-
-".join(auto_msgs)
+        response += "/n/nNew achievements unlocked:" + "/n/n".join(auto_msgs)
     await send_plugin_message(interaction, response)
     await play_event_sound_for_member(interaction.user, "coin")
 
@@ -851,23 +828,15 @@ async def gamble(interaction: discord.Interaction, amount: app_commands.Range[in
         sound = "oof"
     if xp_gain:
         _, level, leveled_up = grant_xp(interaction.guild_id, interaction.user.id, xp_gain)
-        response += f"
-You gained **{xp_gain} XP**."
+        response += f"/nYou gained **{xp_gain} XP**."
         if leveled_up:
-            response += f"
-Level up! You are now level **{level}**."
+            response += f"/nLevel up! You are now level **{level}**."
     quest_msg = advance_quest(interaction.guild_id, interaction.user.id, "gamble")
     if quest_msg:
-        response += f"
-{quest_msg}"
+        response += f"/n{quest_msg}"
     auto_msgs = await check_auto_achievements(interaction.user)
     if auto_msgs:
-        response += "
-
-New achievements unlocked:
-" + "
-
-".join(auto_msgs)
+        response += "/n/nNew achievements unlocked:" + "/n/n".join(auto_msgs)
     await send_plugin_message(interaction, response)
     await play_event_sound_for_member(interaction.user, sound)
 
@@ -883,8 +852,7 @@ async def shop(interaction: discord.Interaction, category: Optional[str] = None)
     embed = discord.Embed(title=f"{keeper['name']} — {keeper['title']}")
     for item_name in items:
         item = SHOP_ITEMS[item_name]
-        embed.add_field(name=item_name, value=f"{item['description']}
-Buy: {item['price']} | Sell: {item['sell_price']}", inline=False)
+        embed.add_field(name=item_name, value=f"{item['description']}/nBuy: {item['price']} | Sell: {item['sell_price']}", inline=False)
     await send_plugin_message(interaction, f"Opening {cat} shop.", embed=embed)
 
 
@@ -910,18 +878,11 @@ async def buy(interaction: discord.Interaction, item_name: str, quantity: app_co
     quest_msg = advance_quest(interaction.guild_id, interaction.user.id, "buy")
     response = f"Bought **{quantity}x {item_key}** for **{total_cost}** coins and earned **{xp_gain} XP**."
     if leveled_up:
-        response += f"
-Level up! You are now level **{level}**."
+        response += f"/nLevel up! You are now level **{level}**."
     if quest_msg:
-        response += f"
-{quest_msg}"
+        response += f"/n{quest_msg}"
     if auto_msgs:
-        response += "
-
-New achievements unlocked:
-" + "
-
-".join(auto_msgs)
+        response += "/n/nNew achievements unlocked:" + "/n/n".join(auto_msgs)
     await send_plugin_message(interaction, response)
     await play_event_sound_for_member(interaction.user, "anvil")
 
@@ -943,12 +904,7 @@ async def sell(interaction: discord.Interaction, item_name: str, quantity: app_c
     auto_msgs = await check_auto_achievements(interaction.user)
     response = f"Sold **{quantity}x {item_key}** for **{payout}** coins."
     if auto_msgs:
-        response += "
-
-New achievements unlocked:
-" + "
-
-".join(auto_msgs)
+        response += "/n/nNew achievements unlocked:" + "/n/n".join(auto_msgs)
     await send_plugin_message(interaction, response)
     await play_event_sound_for_member(interaction.user, "coin")
 
@@ -979,8 +935,7 @@ async def progress(interaction: discord.Interaction, member: Optional[discord.Me
         config = PROGRESS_ACHIEVEMENTS.get(row['achievement_name'])
         if not config:
             continue
-        embed.add_field(name=row['achievement_name'], value=f"{config['description']}
-Progress: {int(row['progress_value'])}/{int(config['target'])}", inline=False)
+        embed.add_field(name=row['achievement_name'], value=f"{config['description']}/nProgress: {int(row['progress_value'])}/{int(config['target'])}", inline=False)
     await send_plugin_message(interaction, f"Opening achievement progress for {target.display_name}.", embed=embed)
 
 
@@ -999,8 +954,7 @@ async def leaderboard(interaction: discord.Interaction) -> None:
         user = interaction.guild.get_member(int(row['user_id']))
         name = user.mention if user else f"User {row['user_id']}"
         lines.append(f"**{i}.** {name} — {row['total']} coins | Lv.{row['level']}")
-    embed = discord.Embed(title="Economy Leaderboard", description="
-".join(lines))
+    embed = discord.Embed(title="Economy Leaderboard", description="/n".join(lines))
     await send_plugin_message(interaction, "Opening economy leaderboard.", embed=embed)
 
 
@@ -1022,8 +976,44 @@ async def menu(interaction: discord.Interaction) -> None:
     embed.add_field(name="Economy", value="/balance, /daily, /work, /pay, /leaderboard", inline=False)
     embed.add_field(name="RPG", value="/xp, /quest, /crate, /boss, /raid", inline=False)
     embed.add_field(name="Shop", value="/shop, /buy, /sell, /inventory", inline=False)
-    embed.add_field(name="Achievements", value="/list_achievements, /my_achievements, /progress", inline=False)
+    embed.add_field(name="Achievements", value="/list_achievements, /my_achievements, /progress, /advancements", inline=False)
+    embed.add_field(name="Music", value="/disc, /stopdisc, /mcsfx", inline=False)
     await send_plugin_message(interaction, "Opening plugin menu.", embed=embed)
+
+
+@bot.tree.command(name="advancements", description="Open the Minecraft-style advancement tabs")
+async def advancements(interaction: discord.Interaction, member: Optional[discord.Member] = None, tab: Optional[str] = None) -> None:
+    target = member or interaction.user
+    selected = (tab or "economy").lower().strip()
+    tabs = {
+        "economy": ["first_coin", "starter", "wealthy", "tycoon", "spender_i"],
+        "utility": ["worker_i", "collector_i"],
+        "combat": ["boss_slayer", "raider"],
+    }
+    if selected not in tabs:
+        await send_plugin_message(interaction, f"Unknown tab. Available: {', '.join(tabs.keys())}", ephemeral=True)
+        return
+
+    with get_db() as conn:
+        owned_rows = conn.execute(
+            "SELECT achievement_name FROM user_achievements WHERE guild_id = ? AND user_id = ?",
+            (interaction.guild_id, target.id),
+        ).fetchall()
+        desc_rows = conn.execute(
+            "SELECT name, description FROM achievements WHERE guild_id = ?",
+            (interaction.guild_id,),
+        ).fetchall()
+
+    owned = {row['achievement_name'] for row in owned_rows}
+    descriptions = {row['name']: row['description'] for row in desc_rows}
+
+    embed = discord.Embed(title=f"Advancement Tab: {selected.title()} — {target.display_name}")
+    for ach in tabs[selected]:
+        status = "✅ Unlocked" if ach in owned else "⬜ Locked"
+        desc = descriptions.get(ach, "No server achievement created yet.")
+        embed.add_field(name=ach, value=f"{status}/n{desc}", inline=False)
+    embed.set_footer(text="Tabs: economy, utility, combat")
+    await send_plugin_message(interaction, f"Opening advancement tab `{selected}` for {target.display_name}.", embed=embed)
 
 
 @bot.tree.command(name="crate", description="Open a rarity crate")
@@ -1141,6 +1131,7 @@ JUKEBOX_SPLASH_TEXTS = [
     "Diamond-tier music!",
     "Redstone-powered rhythm.",
 ]
+JUKEBOX_QUEUES = []
 JUKEBOX_ICONS = {
     "13": "💿",
     "cat": "🐈",
@@ -1195,133 +1186,9 @@ async def disc(interaction: discord.Interaction, name: str) -> None:
     queue_preview = ", ".join(f"{JUKEBOX_ICONS.get(name, '💿')} {name}" for name in JUKEBOX_QUEUES.get(interaction.guild_id, [disc_name])[:5])
     await send_plugin_message(
         interaction,
-        f"{icon} **Now Playing:** `{disc_name}`
-✨ *{splash}*
-📜 **Queue:** {queue_preview}"
+        f"{icon} **Now Playing:** `{disc_name}`/n✨ *{splash}*/n📜 **Queue:** {queue_preview}"
     )
 
-async def play_next_in_queue(guild: discord.Guild) -> None:
-    queue = JUKEBOX_QUEUES.get(guild.id, [])
-    vc = guild.voice_client
-    if not vc or not vc.is_connected() or not queue:
-        JUKEBOX_NOW_PLAYING.pop(guild.id, None)
-        return
-
-    current = queue[0]
-    file_path = DISC_SOUNDS.get(current)
-    if not file_path or not os.path.exists(file_path):
-        queue.pop(0)
-        await play_next_in_queue(guild)
-        return
-
-    JUKEBOX_NOW_PLAYING[guild.id] = current
-
-    def after_playing(error: Optional[Exception]) -> None:
-        if error:
-            print(f"Jukebox playback error: {error}")
-        if JUKEBOX_LOOPS.get(guild.id, False) and queue:
-            pass
-        elif queue:
-            queue.pop(0)
-
-        import asyncio
-        asyncio.run_coroutine_threadsafe(play_next_in_queue(guild), bot.loop)
-
-    vc.play(discord.FFmpegPCMAudio(file_path), after=after_playing)
-
-@bot.tree.command(name="jukebox_insert", description="Insert a disc and play it immediately")
-async def jukebox_insert(interaction: discord.Interaction, name: str) -> None:
-    if not interaction.user.voice or not interaction.user.voice.channel:
-        await send_plugin_message(interaction, "You must be in a voice channel.", ephemeral=True)
-        return
-
-    disc_name = name.lower().strip()
-    file_path = DISC_SOUNDS.get(disc_name)
-    if not file_path or not os.path.exists(file_path):
-        await send_plugin_message(interaction, f"Unknown disc. Available: {', '.join(DISC_SOUNDS.keys())}", ephemeral=True)
-        return
-
-    vc = interaction.guild.voice_client
-    if not vc:
-        vc = await interaction.user.voice.channel.connect()
-    elif vc.channel != interaction.user.voice.channel:
-        await vc.move_to(interaction.user.voice.channel)
-
-    JUKEBOX_QUEUES[interaction.guild_id] = [disc_name]
-    JUKEBOX_LOOPS.setdefault(interaction.guild_id, False)
-
-    if vc.is_playing():
-        vc.stop()
-
-    await play_next_in_queue(interaction.guild)
-
-    splash = random.choice(JUKEBOX_SPLASH_TEXTS)
-    icon = JUKEBOX_ICONS.get(disc_name, "💿")
-    await send_plugin_message(interaction, f"{icon} **Inserted:** `{disc_name}`\n✨ *{splash}*")
-
-@bot.tree.command(name="jukebox_queue", description="Queue a disc in the jukebox")
-async def jukebox_queue(interaction: discord.Interaction, name: str) -> None:
-    disc_name = name.lower().strip()
-    file_path = DISC_SOUNDS.get(disc_name)
-    if not file_path or not os.path.exists(file_path):
-        await send_plugin_message(interaction, f"Unknown disc. Available: {', '.join(DISC_SOUNDS.keys())}", ephemeral=True)
-        return
-
-    queue = JUKEBOX_QUEUES.setdefault(interaction.guild_id, [])
-    queue.append(disc_name)
-    icon = JUKEBOX_ICONS.get(disc_name, "💿")
-    await send_plugin_message(interaction, f"{icon} Added **{disc_name}** to the jukebox queue. Position: **{len(queue)}**")
-
-@bot.tree.command(name="jukebox_list", description="Show the jukebox queue")
-async def jukebox_list(interaction: discord.Interaction) -> None:
-    queue = JUKEBOX_QUEUES.get(interaction.guild_id, [])
-    current = JUKEBOX_NOW_PLAYING.get(interaction.guild_id)
-
-    embed = discord.Embed(title="Jukebox Queue")
-    embed.add_field(
-        name="Now Playing",
-        value=(f"{JUKEBOX_ICONS.get(current, '💿')} {current}" if current else "Nothing"),
-        inline=False,
-    )
-
-    if queue:
-        lines = []
-        for idx, name in enumerate(queue[:10], start=1):
-            lines.append(f"**{idx}.** {JUKEBOX_ICONS.get(name, '💿')} {name}")
-        embed.add_field(name="Queue", value="\n".join(lines), inline=False)
-    else:
-        embed.add_field(name="Queue", value="Empty", inline=False)
-
-    embed.add_field(
-        name="Loop",
-        value=("Enabled" if JUKEBOX_LOOPS.get(interaction.guild_id, False) else "Disabled"),
-        inline=False,
-    )
-
-    await send_plugin_message(interaction, "Opening jukebox queue.", embed=embed)
-
-@bot.tree.command(name="jukebox_loop", description="Toggle jukebox looping")
-async def jukebox_loop(interaction: discord.Interaction) -> None:
-    current = JUKEBOX_LOOPS.get(interaction.guild_id, False)
-    JUKEBOX_LOOPS[interaction.guild_id] = not current
-    state = "enabled" if not current else "disabled"
-    await send_plugin_message(interaction, f"🔁 Jukebox loop {state}.")
-
-@bot.tree.command(name="jukebox_eject", description="Eject the current disc from the jukebox")
-async def jukebox_eject(interaction: discord.Interaction) -> None:
-    vc = interaction.guild.voice_client
-    queue = JUKEBOX_QUEUES.get(interaction.guild_id, [])
-    current = JUKEBOX_NOW_PLAYING.get(interaction.guild_id)
-
-    if current and queue and queue[0] == current:
-        queue.pop(0)
-
-    JUKEBOX_NOW_PLAYING.pop(interaction.guild_id, None)
-
-    if vc and vc.is_playing():
-        vc.stop()
-
-    await send_plugin_message(interaction, f"📤 Ejected disc `{current or 'unknown'}`.")
 
 @bot.tree.command(name="stopdisc", description="Stop the currently playing music disc")
 async def stopdisc(interaction: discord.Interaction) -> None:
@@ -1329,15 +1196,10 @@ async def stopdisc(interaction: discord.Interaction) -> None:
     if not vc or not vc.is_connected():
         await send_plugin_message(interaction, "No jukebox is active right now.", ephemeral=True)
         return
-
-    JUKEBOX_QUEUES[interaction.guild_id] = []
-    JUKEBOX_NOW_PLAYING.pop(interaction.guild_id, None)
-
     if vc.is_playing():
         vc.stop()
         await send_plugin_message(interaction, "⏹️ Jukebox stopped. Disc ejected.")
         return
-
     await send_plugin_message(interaction, "Nothing is currently playing.", ephemeral=True)
 
 
@@ -1384,4 +1246,3 @@ if __name__ == "__main__":
     if TOKEN == "YOUR_BOT_TOKEN_HERE":
         raise RuntimeError("Set your bot token in the DISCORD_TOKEN environment variable.")
     bot.run(TOKEN)
-
